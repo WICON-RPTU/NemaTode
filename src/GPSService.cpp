@@ -91,7 +91,11 @@ void GPSService::attachToParser(NMEAParser& _parser){
 	_parser.setSentenceHandler("GPVTG", [this](const NMEASentence& nmea){
 		this->read_GPVTG(nmea);
 	});
+	_parser.setSentenceHandler("GPGLL", [this](const NMEASentence& nmea){
+        this->read_GPGLL(nmea);
+    });
 
+	// 	  https://gpsd.gitlab.io/gpsd/NMEA.html
 	//    * GP for GPS only solutions
 	//    * GL for GLONASS only solutions
 	//    * GA for GALILEO only solutions
@@ -112,7 +116,6 @@ void GPSService::attachToParser(NMEAParser& _parser){
     _parser.setSentenceHandler("GLVTG", [this](const NMEASentence& nmea){
         this->read_GPVTG(nmea);
     });
-
     _parser.setSentenceHandler("GAGGA", [this](const NMEASentence& nmea){
         this->read_GPGGA(nmea);
     });
@@ -128,8 +131,6 @@ void GPSService::attachToParser(NMEAParser& _parser){
     _parser.setSentenceHandler("GAVTG", [this](const NMEASentence& nmea){
         this->read_GPVTG(nmea);
     });
-
-
     _parser.setSentenceHandler("GNGGA", [this](const NMEASentence& nmea){
         this->read_GPGGA(nmea);
     });
@@ -145,7 +146,9 @@ void GPSService::attachToParser(NMEAParser& _parser){
     _parser.setSentenceHandler("GNVTG", [this](const NMEASentence& nmea){
         this->read_GPVTG(nmea);
     });
-
+	_parser.setSentenceHandler("GNGLL", [this](const NMEASentence& nmea){
+        this->read_GPGLL(nmea);
+    });
 }
 
 
@@ -559,6 +562,100 @@ void GPSService::read_GPVTG(const NMEASentence& nmea){
 	catch (NMEAParseError& ex)
 	{
 		NMEAParseError pe("GPS Data Bad Format [$GPVTG] :: " + ex.message, nmea);
+		throw pe;
+	}
+}
+
+void GPSService::read_GPGLL(const NMEASentence& nmea){
+	/*
+	$GPGLL,3723.2475,N,12158.3416,W,161229.487,A,A*41
+
+	Where:
+	GLL          		GLL protocol header 						(Geographic Position - Latitude/Longitude)
+	[0] 3723.2475   	Latitude 37 deg 23.2475' N 					(ddmm.mmmm)
+	[1] N           	Latitude Direction: N = North 				(N=north or S=south)
+	[2] 12158.3416  	Longitude 121 deg 58.3416' W 				(ddmm.mmmm)
+	[3] W           	Longitude Direction: W = West 				(E=east or W=west)
+	[4] 161229.487  	Fix taken at 16:12:29.487 UTC 				(hhmmss.sss)
+	[5] A           	Status: A = Data valid						(A=data valid or V=data not valid)
+	[6] A           	Mode: A = Autonomous						(A=Autonomous, D=DGPS, E=DR (Only present in NMEA v3.00))
+	[7] *41         	The checksum data, always begins with *
+	*/
+
+	try
+	{
+		if (!nmea.checksumOK()){
+			throw NMEAParseError("Checksum is invalid!");
+		}
+
+		if (nmea.parameters.size() < 7){
+			throw NMEAParseError("GPS data is missing parameters.");
+		}
+
+		string sll;
+		string dir;
+		// LAT
+		sll = nmea.parameters[0];
+		dir = nmea.parameters[1];
+		if (!sll.empty()){
+			this->fix.latitude = convertLatLongToDeg(sll, dir);
+		}
+
+		// LONG
+		sll = nmea.parameters[2];
+		dir = nmea.parameters[3];
+		if (!sll.empty()){
+			this->fix.longitude = convertLatLongToDeg(sll, dir);
+		}
+
+		// TIMESTAMP
+		this->fix.timestamp.setTime(parseDouble(nmea.parameters[4]));
+
+		// ACTIVE
+		bool lockupdate = false;
+		char status = 'V';
+		if (!nmea.parameters[5].empty()){
+			status = nmea.parameters[5][0];
+		}
+		this->fix.status = status;
+		if (status == 'V'){
+			lockupdate = this->fix.setlock(false);
+		}
+		else if (status == 'A') {
+			lockupdate = this->fix.setlock(true);
+		}
+		else {
+			lockupdate = this->fix.setlock(false);		//not A or V, so must be wrong... no lock
+		}
+		
+		if (!nmea.parameters[6].empty()){
+			if (nmea.parameters[6] == "A"){
+				this->fix.quality = 1;
+			}
+			else if (nmea.parameters[6] == "D"){
+				this->fix.quality = 2;
+			}
+			else if (nmea.parameters[6] == "E"){
+				this->fix.quality = 6;
+			}
+			else {}
+		}
+		
+		else {}
+		//calling handlers
+		if (lockupdate){
+			this->onLockStateChanged(this->fix.haslock);
+		}
+		this->onUpdate();
+	}
+	catch (NumberConversionError& ex)
+	{
+		NMEAParseError pe("GPS Number Bad Format [$GPGLL] :: " + ex.message, nmea);
+		throw pe;
+	}
+	catch (NMEAParseError& ex)
+	{
+		NMEAParseError pe("GPS Data Bad Format [$GPGLL] :: " + ex.message, nmea);
 		throw pe;
 	}
 }
